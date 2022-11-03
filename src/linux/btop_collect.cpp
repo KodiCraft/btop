@@ -27,6 +27,7 @@ tab-size = 4
 #include <ifaddrs.h>
 #include <net/if.h>
 
+
 #if !(defined(STATIC_BUILD) && defined(__GLIBC__))
 	#include <pwd.h>
 #endif
@@ -45,6 +46,8 @@ using std::min;
 using std::numeric_limits;
 using std::round;
 using std::streamsize;
+using std::string;
+using std::stoi;
 
 namespace fs = std::filesystem;
 namespace rng = std::ranges;
@@ -94,6 +97,12 @@ namespace Gpu {
 	// We currently only attempt to use one GPU, so we only need one of these
 	string gpuName;
 	string gpuDriver;
+
+	int capabilities{};
+
+	const int HAS_TEMP     = 1 << 0;
+	const int HAS_USAGE    = 1 << 1;
+	const int HAS_VRAM 	   = 1 << 2;
 
 	gpu_info current_gpu;
 
@@ -179,6 +188,143 @@ namespace Gpu {
 		Logger::error("Failed to get GPU driver: popen failed");
 		return "GPU driver not found";
 	}
+
+	int get_capabilities() {
+		// This should always be called after we have a valid gpuDriver
+		// Check that gpuDriver is not empty
+		if (gpuDriver.empty()) {
+			Logger::error("Failed to get GPU capabilities: gpuDriver is empty (did init run?)");
+			return 0;
+		}
+
+		// We know the capabilities of the GPU based on the driver
+		// We can use the string::find function to check if a string contains another string
+		// We can use the string::npos constant to check if the string was not found
+		int caps = 0;
+		if (gpuDriver.find("nvidia") != string::npos) {
+			// On NVIDIA GPUs, we can use nvidia-smi to get the VRAM usage, the temperature and the general usage
+			// but nvidia-smi is not available on all systems, so we have to check if it exists
+			// We can use the access function to check if a file exists
+			// The first argument is the path to the file
+			// The second argument is the mode to check the file in
+			// We use F_OK to check if the file exists
+			if (access("/usr/bin/nvidia-smi", F_OK) != -1) {
+				// If nvidia-smi exists, we can use it to get the VRAM usage, the temperature and the general usage
+				caps |= HAS_VRAM;
+				caps |= HAS_TEMP;
+				caps |= HAS_USAGE;
+				Logger::debug("Found nvidia-smi");
+			}
+			else {
+				// Otherwise, we simply log a warning and don't use nvidia-smi
+				Logger::warning("nvidia-smi not found, VRAM, temperature and usage will not be available!");
+			}
+		} else if (gpuDriver.find("amdgpu") != string::npos) {
+			// With the amdgpu driver, everything can be found in the sysfs, we'll check if the files exist just to be sure
+			if (access("/sys/class/drm/card0/device/hwmon/hwmon0/temp1_input", F_OK) != -1) {
+				caps |= HAS_TEMP;
+				Logger::debug("Found temperature sensor");
+			}
+			if (access("/sys/class/drm/card0/device/gpu_busy_percent", F_OK) != -1) {
+				caps |= HAS_USAGE;
+				Logger::debug("Found usage sensor");
+			}
+			if (access("/sys/class/drm/card0/device/mem_info_vram_total", F_OK) != -1) {
+				caps |= HAS_VRAM;
+				Logger::debug("Found VRAM sensor");
+			}
+		} else if (gpuDriver.find("intel") != string::npos) {
+			// I have no clue how this driver works
+			// I don't have an Intel GPU to test with
+			// TODO: Find out how to get the temperature, usage and VRAM on Intel GPUs
+			Logger::warning("Intel GPU detected, temperature, usage and VRAM will not be available!");
+			Logger::warning("If you know how to get this information, please open an issue on GitHub!");
+		} else {
+			// If the driver is not recognized, we log an error message and return 0
+			Logger::error("Failed to get GPU capabilities: unknown driver " + gpuDriver);
+			return 0;
+		}
+
+		// We return the capabilities we found
+		return caps;
+	}
+
+	int get_temp() {
+		// First make sure that the capabilities are valid
+		if (!(capabilities & HAS_TEMP)) {
+			Logger::error("Failed to get GPU temperature: GPU Temp not supported (why did this run?)");
+			return 0;
+		}
+
+		// Check which driver we are using out of the ones we support
+		if (gpuDriver.find("nvidia") != string::npos) {
+			// If we are using the NVIDIA driver, we can use nvidia-smi to get the temperature
+			// We can use the popen function to open a stream to a command
+			// The first argument is the command to run
+			// The second argument is the mode to open the stream in
+			// We use "r" to open the stream for reading
+			FILE* stream = popen("nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader", "r");
+			if (stream) {
+				// If the stream opened successfully, we can read the output
+				// We can use getline to read a line from the stream
+				// The first argument is a pointer to a char* that will be set to the line
+				// The second argument is a pointer to a size_t that will be set to the length of the line
+				// The third argument is the stream to read from
+				char* line = NULL;
+				size_t len = 0;
+				ssize_t slen = getline(&line, &len, stream);
+				// We can use the pclose function to close the stream
+				// This will also return the exit status of the command
+				// We can use WEXITSTATUS to get the actual exit status
+				int status = WEXITSTATUS(pclose(stream));
+				// The line we have received may still have a newline at the end, if so we have to remove it
+				if (slen > 0 && line[slen - 1] == '\n') {
+					line[slen - 1] = '\0';
+				}
+				if (status == 0) {
+					// If the command exited successfully, we can return the line
+					Logger::debug("GPU temperature: " + string(line));
+					return stoi(line);
+				} else {
+					// If the command exited with an error, we log an error message and return 0
+					Logger::error("Failed to get GPU temperature: nvidia-smi exited with status " + to_string(status));
+					return 0;
+				}
+			}
+		}
+		else if (gpuDriver.find("amdgpu") != string::npos) {
+			// If we are using the amdgpu driver, we can use the sysfs to get the temperature
+			// We can use the ifstream class to read from a file
+			// The first argument is the path to the file
+			ifstream file("/sys/class/drm/card0/device/hwmon/hwmon0/temp1_input");
+			if (file.is_open()) {
+				// If the file opened successfully, we can read the contents
+				// We can use the getline function to read a line from the file
+				// The first argument is a pointer to a string that will be set to the line
+				// The second argument is the file to read from
+				string line;
+				getline(file, line);
+				// We can use the close function to close the file
+				file.close();
+				// The line we have received is in millidegrees, so we have to divide it by 1000
+				// We can use the stof function to convert a string to a float
+				// We can use the round function to round a float to an int
+				int temp = round(stof(line) / 1000);
+				Logger::debug("GPU temperature: " + to_string(temp));
+				return temp;
+			} else {
+				// If the file failed to open, we log an error message and return 0
+				Logger::error("Failed to get GPU temperature: failed to open /sys/class/drm/card0/device/hwmon/hwmon0/temp1_input");
+				return 0;
+			}
+		}
+		
+		// If the driver is not recognized, we log an error message and return 0
+		Logger::error("Failed to get GPU temperature: unknown driver " + gpuDriver + " (why did this run?)");
+		return 0;
+		
+	}
+
 
 	auto collect(bool no_update) -> gpu_info& {
 	    auto& gpu = current_gpu;
