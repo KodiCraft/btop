@@ -90,6 +90,106 @@ namespace Mem {
 	double old_uptime;
 }
 
+namespace Gpu {
+	// We currently only attempt to use one GPU, so we only need one of these
+	string gpuName;
+	string gpuDriver;
+
+	gpu_info current_gpu;
+
+	string get_gpuName() {
+		// We can use lspci to get the name of the GPU
+		// The shell command would look something like:
+		// lspci -v | grep -i 'vga\|3d\|2d' | cut -d'[' -f3 | cut -d']' -f1
+		
+		// We can use the popen function to run the command and get the output
+		// The first argument is the command to run, the second is the mode to open the stream in
+		// We use "r" to open the stream for reading
+		FILE* stream = popen("lspci -v | grep -i 'vga\\|3d\\|2d' | cut -d'[' -f3 | cut -d']' -f1", "r");
+		if (stream) {
+			// We can use the getline function to read a line from the stream
+			// The first argument is a pointer to the string to store the line in
+			// The second argument is a pointer to the size of the string
+			// The third argument is the stream to read from
+			// getline will resize the string to fit the line, and update the size argument
+			char* line = NULL;
+			size_t len = 0;
+			ssize_t slen = getline(&line, &len, stream);
+			// We can use the pclose function to close the stream
+			// This will also return the exit status of the command
+			// We can use WEXITSTATUS to get the actual exit status
+			int status = WEXITSTATUS(pclose(stream));
+			// The line we have received may still have a newline at the end, if so we have to remove it
+			if (slen > 0 && line[slen - 1] == '\n') {
+				line[slen - 1] = '\0';
+			}
+
+			if (status == 0) {
+				// If the command exited successfully, we can return the line
+				Logger::debug("GPU name: " + string(line));
+				return line;
+			} else {
+				// If the command exited with an error, we log an error message and return a placeholder
+				Logger::error("Failed to get GPU name: lspci exited with status " + to_string(status));
+				return "GPU name not found";
+			}
+		}
+		// If the stream failed to open, we log an error message and return a placeholder
+		Logger::error("Failed to get GPU name: popen failed");
+		return "GPU name not found";
+	}
+
+	string get_gpuDriver() {
+		// We can use lspci to get the name of the GPU
+		// The shell command would look something like:
+		// lspci -k | grep -EA3 'VGA|3D|Display' | sed -n 3p | cut -d' ' -f5
+
+		// We can use the popen function to run the command and get the output
+		// The first argument is the command to run, the second is the mode to open the stream in
+		// We use "r" to open the stream for reading
+		FILE* stream = popen("lspci -k | grep -EA3 'VGA|3D|Display' | sed -n 3p | cut -d' ' -f5", "r");
+		if (stream) {
+			// We can use the getline function to read a line from the stream
+			// The first argument is a pointer to the string to store the line in
+			// The second argument is a pointer to the size of the string
+			// The third argument is the stream to read from
+			// getline will resize the string to fit the line, and update the size argument
+			char* line = NULL;
+			size_t len = 0;
+			ssize_t slen = getline(&line, &len, stream);
+			// We can use the pclose function to close the stream
+			// This will also return the exit status of the command
+			// We can use WEXITSTATUS to get the actual exit status
+			int status = WEXITSTATUS(pclose(stream));
+			// The line we have received may still have a newline at the end, if so we have to remove it
+			if (slen > 0 && line[slen - 1] == '\n') {
+				line[slen - 1] = '\0';
+			}
+			if (status == 0) {
+				// If the command exited successfully, we can return the line
+				Logger::debug("GPU driver: " + string(line));
+				return line;
+			} else {
+				// If the command exited with an error, we log an error message and return a placeholder
+				Logger::error("Failed to get GPU driver: lspci exited with status " + to_string(status));
+				return "GPU driver not found";
+			}
+		}
+		// If the stream failed to open, we log an error message and return a placeholder
+		Logger::error("Failed to get GPU driver: popen failed");
+		return "GPU driver not found";
+	}
+
+	auto collect(bool no_update) -> gpu_info& {
+	    auto& gpu = current_gpu;
+
+		gpu.name = gpuName;
+	 	gpu.driver = gpuDriver;
+
+		return gpu;
+	}
+}
+
 namespace Shared {
 
 	fs::path procPath, passwd_path;
@@ -149,6 +249,9 @@ namespace Shared {
 		Mem::old_uptime = system_uptime();
 		Mem::collect();
 
+		//? Init for namespace Gpu
+		Gpu::gpuName = Gpu::get_gpuName();
+		Gpu::gpuDriver = Gpu::get_gpuDriver();
 	}
 
 }
@@ -2031,60 +2134,6 @@ namespace Proc {
 	}
 }
 
-namespace Gpu {
-	// GPU info
-	// We currently only attempt to use one GPU, so we only need one of these
-	string gpuName;
-	string gpuDriver;
-
-	gpu_info current_gpu;
-
-	string get_gpuName() {
-		// We can use lspci to get the name of the GPU
-		// The shell command would look something like:
-		// lspci -v | grep -i 'vga\|3d\|2d' | cut -d'[' -f3 | cut -d']' -f1
-		
-		// We can use the popen function to run the command and get the output
-		// The first argument is the command to run, the second is the mode to open the stream in
-		// We use "r" to open the stream for reading
-		FILE* stream = popen("lspci -v | grep -i 'vga\\|3d\\|2d' | cut -d'[' -f3 | cut -d']' -f1", "r");
-		if (stream) {
-			// We can use the getline function to read a line from the stream
-			// The first argument is a pointer to the string to store the line in
-			// The second argument is a pointer to the size of the string
-			// The third argument is the stream to read from
-			// getline will resize the string to fit the line, and update the size argument
-			char* line = NULL;
-			size_t len = 0;
-			ssize_t slen = getline(&line, &len, stream);
-			// We can use the pclose function to close the stream
-			// This will also return the exit status of the command
-			// We can use WEXITSTATUS to get the actual exit status
-			int status = WEXITSTATUS(pclose(stream));
-			if (status == 0) {
-				// If the command exited successfully, we can return the line
-				Logger::debug("GPU name: " + string(line));
-				return line;
-			} else {
-				// If the command exited with an error, we log an error message and return a placeholder
-				Logger::error("Failed to get GPU name: lspci exited with status " + to_string(status));
-				return "GPU name not found";
-			}
-		}
-		// If the stream failed to open, we log an error message and return a placeholder
-		Logger::error("Failed to get GPU name: popen failed");
-		return "GPU name not found";
-	}
-
-	auto collect(bool no_update) -> gpu_info& {
-	    auto& gpu = current_gpu;
-
-		gpu.name = get_gpuName();
-	 	gpu.driver = "N/A";
-
-		return gpu;
-	}
-}
 namespace Tools {
 	double system_uptime() {
 		string upstr;
