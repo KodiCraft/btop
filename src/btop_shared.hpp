@@ -313,3 +313,21 @@ namespace Proc {
                    int cur_depth, bool collapsed, const string& filter,
                    bool found = false, bool no_update = false, bool should_filter = false);
 }
+
+namespace Gpu{
+	extern string box;
+	extern int x, y, width, height, min_width, min_height;
+	extern bool shown, redraw;
+	extern string gpuName, gpuDriver;
+
+	struct gpu_info {
+		string name{};      // defaults to ""
+		string driver{};    // defaults to ""
+		string temp{};      // defaults to ""
+		string usage{};     // defaults to ""
+		string vram_used{}; // defaults to ""
+		string vram_total{};// defaults to ""
+	};
+
+	auto collect(bool no_update = false) -> gpu_info&;
+}

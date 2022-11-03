@@ -713,6 +713,11 @@ int main(int argc, char **argv) {
 			break;
 		}
 	}
+	// For debugging purposes, allow config dir to be set with its own environment variable
+	if (std::getenv("BTOP_CONFIG_DIR") != NULL and access(std::getenv("BTOP_CONFIG_DIR"), W_OK) != -1) {
+		Config::conf_dir = fs::path(std::getenv("BTOP_CONFIG_DIR"));
+	}
+
 	if (Config::conf_dir.empty()) {
 		cout 	<< "WARNING: Could not get path user HOME folder.\n"
 				<< "Make sure $XDG_CONFIG_HOME or $HOME environment variables is correctly set to fix this." << endl;
@@ -923,6 +928,8 @@ int main(int argc, char **argv) {
 
 	//? Print out box outlines
 	cout << Term::sync_start << Cpu::box << Mem::box << Net::box << Proc::box << Term::sync_end << flush;
+
+	Gpu::collect();
 
 
 	//? ------------------------------------------------ MAIN LOOP ----------------------------------------------------
